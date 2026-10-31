@@ -34,12 +34,26 @@ jobs:
 
           Write-Host "Project found successfully!"
 
+
       - name: Compile DLL
         shell: pwsh
         run: |
-          & msbuild "mss32/mss32.vcxproj" /m /p:Configuration=Release /p:Platform=Win32 /bl:build.binlog
+          Write-Host "Checking solution configurations..."
+
+          & msbuild "mss32/mss32.sln" /t:ValidateSolutionConfiguration /p:Configuration=Release /p:Platform=Win32 /v:minimal
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release Win32 is not a valid solution configuration."
+          }
+
+          Write-Host "Building solution..."
+
+          & msbuild "mss32/mss32.sln" /m /p:Configuration=Release /p:Platform=Win32 /v:minimal /bl:build.binlog
+
           if ($LASTEXITCODE -ne 0) {
             throw "Compilation failed: $LASTEXITCODE"
+          }
+
           }
 
       - name: Upload logs
