@@ -18,12 +18,7 @@
  */
 
 #include "hooks.h"
-#include <limits>
-#include <mutex>
-#include <chrono>
-#include <cstdint>
-#include <unordered_map>
-#include <unordered_set>
+#include "taskspell.h"
 #include "stealitemhooks.h"
 #include "stealmerchantiteminterf.h"
 #include "aigiveitemsaction.h"
@@ -135,7 +130,6 @@
 #include "itembase.h"
 #include "itemcategory.h"
 #include "itemexpotionboost.h"
-#include "itemtypelist.h"
 #include "itemtransferhooks.h"
 #include "itemutils.h"
 #include "leaderabilitycat.h"
@@ -1194,6 +1188,40 @@ Hooks getHooks()
     return hooks;
 }
 
+// ZM57: client castSpell probe. NO spell denial and NO quota mutations.
+// Addresses are specific to Discipl2(20261031-180023).exe.
+static game::CTaskSpellVftable::CastSpell zm57OriginalCastSpell = nullptr;
+
+static void __fastcall zm57CastSpellObserved(const game::CTaskSpell* task,
+                                             void* /*edx*/,
+                                             const game::CMqPoint* position)
+{
+    spdlog::warn("[ZM57_CLIENT] CAST_ENTER task={} data={} position={} original={}",
+                 static_cast<const void*>(task),
+                 task ? static_cast<const void*>(task->data) : nullptr,
+                 static_cast<const void*>(position),
+                 reinterpret_cast<const void*>(zm57OriginalCastSpell));
+    if (zm57OriginalCastSpell)
+        zm57OriginalCastSpell(task, position);
+    spdlog::warn("[ZM57_CLIENT] CAST_RETURN task={}", static_cast<const void*>(task));
+}
+
+static bool zm57TargetMatchesExe()
+{
+    const auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleA(nullptr));
+    if (!base) return false;
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew <= 0 || dos->e_lfanew > 4096)
+        return false;
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS32*>(base + dos->e_lfanew);
+    if (nt->Signature != IMAGE_NT_SIGNATURE || nt->OptionalHeader.Magic != IMAGE_NT_OPTIONAL_HDR32_MAGIC
+        || nt->OptionalHeader.SizeOfImage != 0x485000) return false;
+    // Vtable slot RVA 0x2DC738 -> castSpell RVA 0xCDD3A.
+    const auto* slot = reinterpret_cast<const std::uint32_t*>(base + 0x2DC738);
+    const auto expected = reinterpret_cast<std::uintptr_t>(base + 0xCDD3A);
+    return *slot == expected;
+}
+
 Hooks getVftableHooks()
 {
     using namespace game;
@@ -1201,6 +1229,19 @@ Hooks getVftableHooks()
     auto& orig = getOriginalFunctions();
 
     Hooks hooks;
+
+    // Passive client probe: install only for the verified EXE layout.
+    // It always calls the original castSpell; no blocking or saved-variable changes.
+    if (zm57TargetMatchesExe()) {
+        const auto* base = reinterpret_cast<const unsigned char*>(GetModuleHandleA(nullptr));
+        hooks.emplace_back(HookInfo{
+            const_cast<unsigned char*>(base + 0x2DC738),
+            reinterpret_cast<void*>(&zm57CastSpellObserved),
+            reinterpret_cast<void**>(&zm57OriginalCastSpell)});
+        spdlog::warn("[ZM57_CLIENT] hook scheduled castSpell vtable slot RVA=0x2DC738");
+    } else {
+        spdlog::warn("[ZM57_CLIENT] unsupported EXE layout; hook NOT installed");
+    }
 
     if (CBatAttackBestowWardsApi::vftable()) {
         // Allow bestow wards to target dead units, so it can be coupled with Revive as a secondary
@@ -2382,186 +2423,6 @@ void __stdcall getStackFortRuinGroupForChangeHooked(game::IMidgardObjectMap* obj
     *result = group;
 }
 
-// ZM ETAP30: active potion quota using saved unit modifiers
-
-// No DLL-local counters; opening a save does not reset ACTIVE effects.
-
-struct Zm30PotionCount {
-
-    int permanent{0};
-
-    int oneday{0};
-
-    bool valid{false};
-
-};
-
-
-
-static Zm30PotionCount zm30CountActivePotionModifiers(const game::IUsUnit* impl)
-
-{
-
-    using namespace game;
-
-    Zm30PotionCount result;
-
-    auto* const* global = GlobalDataApi::get().getGlobalData();
-
-    if (!impl || !global || !*global || !(*global)->itemTypes || !(*global)->itemTypes->data)
-
-        return result;
-
-
-
-    const auto& items = (*global)->itemTypes->data->data;
-
-    const auto& categories = ItemCategories::get();
-
-    std::unordered_set<int> permanentIds;
-
-    std::unordered_set<int> onedayIds;
-
-
-
-    for (const auto* i = items.bgn; i != items.end; ++i) {
-
-        const auto* item = i->second;
-
-        if (!item || !item->vftable)
-
-            continue;
-
-        const auto* category = item->vftable->getCategory(item);
-
-        if (!category)
-
-            continue;
-
-        const bool permanent = category->id == categories.potionPermanent->id;
-
-        const bool oneday = category->id == categories.potionBoost->id;
-
-        if (!permanent && !oneday)
-
-            continue;
-
-        const auto* boost = castItemToPotionBoost(item);
-
-        if (!boost)
-
-            continue;
-
-        const auto* id = boost->vftable->getModifierId(boost);
-
-        if (!id || *id == invalidId)
-
-            continue;
-
-        auto& uniqueIds = permanent ? permanentIds : onedayIds;
-
-        if (uniqueIds.insert(id->value).second && hasModifier(impl, id)) {
-
-            if (permanent) ++result.permanent;
-
-            else ++result.oneday;
-
-        }
-
-    }
-
-    result.valid = true;
-
-    return result;
-
-}
-
-
-
-// ZM ETAP33: bounded potion denial diagnostics and scenario-backed spell meter
-
-// The decision to DENY is unchanged. ONLY logging is rate limited.
-
-// One log per changed (unit, category, active, cap) or after 5 seconds.
-
-// State is only diagnostic, never a gameplay counter.
-
-struct Zm33PotionLogState {
-
-    int active{-1};
-
-    int cap{-1};
-
-    std::uint32_t suppressed{0};
-
-    std::chrono::steady_clock::time_point last{};
-
-};
-
-static void zm33LogPotionDeny(bool permanent, int unit, int active, int cap)
-
-{
-
-    static std::mutex logMutex;
-
-    static std::unordered_map<std::uint64_t, Zm33PotionLogState> states;
-
-    const std::uint64_t key = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(unit)) << 1)
-
-                               | static_cast<std::uint64_t>(permanent ? 1u : 0u);
-
-    const auto now = std::chrono::steady_clock::now();
-
-    bool shouldLog = false;
-
-    std::uint32_t skipped = 0;
-
-    {
-
-        std::lock_guard<std::mutex> guard(logMutex);
-
-        if (states.size() > 512 && states.find(key) == states.end())
-
-            states.clear(); // Bounded memory for long-running sessions.
-
-        auto& s = states[key];
-
-        if (s.active != active || s.cap != cap || s.last.time_since_epoch().count() == 0
-
-            || now - s.last >= std::chrono::seconds(5)) {
-
-            shouldLog = true;
-
-            skipped = s.suppressed;
-
-            s.suppressed = 0;
-
-            s.active = active;
-
-            s.cap = cap;
-
-            s.last = now;
-
-        } else if (s.suppressed != std::numeric_limits<std::uint32_t>::max()) {
-
-            ++s.suppressed;
-
-        }
-
-    }
-
-    if (shouldLog) {
-
-        spdlog::warn("[ZM30_POTION] DENY kind={} unit={} active={} max={} suppressed={} (ZM33_THROTTLE)",
-
-                     permanent ? "permanent" : "oneday", unit, active, cap, skipped);
-
-    }
-
-}
-
-
-
 game::CanApplyPotionResult __stdcall canApplyPotionToUnitHooked(
     const game::IMidgardObjectMap* objectMap,
     const game::CMidgardID* unitId,
@@ -2591,25 +2452,6 @@ game::CanApplyPotionResult __stdcall canApplyPotionToUnitHooked(
         auto potionBoost = castItemToPotionBoost(itemBase);
         if (hasModifier(unit->unitImpl, potionBoost->vftable->getModifierId(potionBoost))) {
             return CanApplyPotionResult::AlreadyApplied;
-        }
-        // ZM: count active potion modifiers before applying another boost.
-        const auto& limits = gameSettings().zmLimits;
-        const bool permanent = itemCategory->id == itemCategories.potionPermanent->id;
-        const int cap = limits.enabled
-            ? (permanent ? limits.permanentPotionsPerUnit : limits.onedayPotionsPerUnit)
-            : (permanent ? gameSettings().maxPotionBoostsPerUnit
-                         : gameSettings().maxPotionOnedayBoostsPerUnit);
-        if (cap > 0) {
-            const auto counts = zm30CountActivePotionModifiers(unit->unitImpl);
-            if (!counts.valid) {
-                spdlog::error("[ZM30_POTION] Modifier data unavailable; denying potion");
-                return CanApplyPotionResult::AlreadyApplied;
-            }
-            const int active = permanent ? counts.permanent : counts.oneday;
-            if (active >= cap) {
-                zm33LogPotionDeny(permanent, unitId->value, active, cap);
-                return CanApplyPotionResult::AlreadyApplied;
-            }
         }
     } else if (itemCategory->id == itemCategories.potionHeal->id) {
         if (unit->currentHp <= 0) {
