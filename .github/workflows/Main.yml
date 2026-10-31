@@ -1,13 +1,15 @@
 
-name: D2ModdingToolset - Build DLL
+name: D2ModdingToolset - Build mss32 DLL
 
 on:
   push:
-    branches: [master]
+    branches:
+      - master
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build mss32.dll Win32
     runs-on: windows-2022
 
     steps:
@@ -19,84 +21,51 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Detect solution configuration
+      - name: Verify source files
         shell: pwsh
         run: |
-          $solution = "mss32/mss32.sln"
+          Write-Host "Checking project files..."
 
-          if (-not (Test-Path $solution)) {
-            throw "Solution file not found: $solution"
+          if (-not (Test-Path "mss32/mss32.vcxproj")) {
+            throw "Missing mss32.vcxproj"
           }
 
-          $content = Get-Content $solution
-          $inside = $false
-          $configs = @()
+          Write-Host "Project found."
 
-          foreach ($line in $content) {
-            if ($line -match 'GlobalSection\(SolutionConfigurationPlatforms\)') {
-              $inside = $true
-              continue
-            }
-
-            if ($inside -and $line -match 'EndGlobalSection') {
-              break
-            }
-
-            if ($inside -and $line -match '^\s*(.+?)\|(.+?)\s*=') {
-              $configs += [PSCustomObject]@{
-                Configuration = $Matches[1].Trim()
-                Platform = $Matches[2].Trim()
-              }
-            }
-          }
-
-          Write-Host "Available configurations:"
-          $configs | Format-Table | Out-String | Write-Host
-
-          $selected = $configs |
-            Where-Object { $_.Configuration -eq "Release" } |
-            Select-Object -First 1
-
-          if (-not $selected) {
-            throw "No Release configuration found."
-          }
-
-          "BUILD_CONFIG=$($selected.Configuration)" >> $env:GITHUB_ENV
-          "BUILD_PLATFORM=$($selected.Platform)" >> $env:GITHUB_ENV
-
-          Write-Host "Selected: $($selected.Configuration)|$($selected.Platform)"
-
-
-      - name: Inspect mss32 project configurations
+      - name: Prepare output directory
         shell: pwsh
         run: |
-          $project = "mss32/mss32.vcxproj"
-          [xml]$xml = Get-Content $project
+          New-Item -ItemType Directory -Force -Path "build-output" | Out-Null
 
-          Write-Host "=== Available project configurations ==="
-          $xml.Project.ItemGroup.ProjectConfiguration |
-            ForEach-Object {
-              Write-Host $_.Include
-            }
+          $output = (Resolve-Path "build-output").Path + "\"
 
-          Write-Host "=== Output directories ==="
-          $xml.Project.PropertyGroup |
-            Where-Object { $_.Condition -or $_.OutDir } |
-            ForEach-Object {
-              Write-Host "Condition: $($_.Condition)"
-              Write-Host "OutDir: $($_.OutDir)"
-              Write-Host "ConfigurationType: $($_.ConfigurationType)"
-            }
+          "DLL_OUTPUT=$output" >> $env:GITHUB_ENV
+
+          Write-Host "Output directory: $output"
 
       - name: Compile DLL
         shell: pwsh
         run: |
-          & msbuild "mss32/mss32.sln" /m /p:Configuration=Release /p:Platform=Win32 /v:minimal /bl:build.binlog
+          & msbuild "mss32/mss32.vcxproj" `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=Win32 `
+            "/p:DISCIPLES2_PATH=$env:DLL_OUTPUT" `
+            "/p:OutDir=$env:DLL_OUTPUT" `
+            /v:minimal `
+            /bl:build.binlog
 
           if ($LASTEXITCODE -ne 0) {
             throw "MSBuild failed with exit code $LASTEXITCODE"
           }
 
+      - name: Show compiled files
+        if: success()
+        shell: pwsh
+        run: |
+          Write-Host "Compiled files:"
+          Get-ChildItem "build-output" -Recurse |
+            Select-Object FullName, Length
 
       - name: Upload build logs
         if: always()
@@ -111,7 +80,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: compiled-mss32
-          path: |
-            **/Release/*.dll
-            **/x86/Release/*.dll
-          if-no-files-found: warn
+          path: build-output/*.dll
+          if-no-files-found: error
