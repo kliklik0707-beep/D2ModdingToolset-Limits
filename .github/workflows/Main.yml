@@ -21,27 +21,56 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Verify source files
+      - name: Prepare directories
         shell: pwsh
         run: |
-          Write-Host "Checking project files..."
-
-          if (-not (Test-Path "mss32/mss32.vcxproj")) {
-            throw "Missing mss32.vcxproj"
-          }
-
-          Write-Host "Project found."
-
-      - name: Prepare output directory
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path "build-output" | Out-Null
+          New-Item -ItemType Directory -Force "build-output" | Out-Null
+          New-Item -ItemType Directory -Force "mss32/Lib" | Out-Null
 
           $output = (Resolve-Path "build-output").Path + "\"
-
           "DLL_OUTPUT=$output" >> $env:GITHUB_ENV
 
-          Write-Host "Output directory: $output"
+      - name: Build SLikeNet
+        shell: pwsh
+        run: |
+          & msbuild "SLikeNet/Lib/LibStatic/LibStatic.vcxproj" `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=Win32 `
+            /v:minimal
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "SLikeNet build failed"
+          }
+
+      - name: Build ScenarioGenerator
+        shell: pwsh
+        run: |
+          & msbuild "D2RSG/ScenarioGenerator/ScenarioGenerator.vcxproj" `
+            /m `
+            /p:Configuration=Release `
+            /p:Platform=Win32 `
+            /v:minimal
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "ScenarioGenerator build failed"
+          }
+
+      - name: Verify libraries
+        shell: pwsh
+        run: |
+          $libraries = @(
+            "mss32/Lib/SLikeNet_LibStatic_Release_Win32.lib"
+            "mss32/Lib/ScenarioGenerator_Release_Win32.lib"
+          )
+
+          foreach ($library in $libraries) {
+            if (-not (Test-Path $library)) {
+              throw "Missing library: $library"
+            }
+
+            Write-Host "Found: $library"
+          }
 
       - name: Compile DLL
         shell: pwsh
@@ -56,14 +85,13 @@ jobs:
             /bl:build.binlog
 
           if ($LASTEXITCODE -ne 0) {
-            throw "MSBuild failed with exit code $LASTEXITCODE"
+            throw "DLL compilation failed"
           }
 
       - name: Show compiled files
         if: success()
         shell: pwsh
         run: |
-          Write-Host "Compiled files:"
           Get-ChildItem "build-output" -Recurse |
             Select-Object FullName, Length
 
