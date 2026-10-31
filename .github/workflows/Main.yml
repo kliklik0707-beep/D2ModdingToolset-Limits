@@ -43,18 +43,29 @@ jobs:
             throw "SLikeNet build failed"
           }
 
+
       - name: Build ScenarioGenerator
         shell: pwsh
         run: |
+          $solutionDir = (Resolve-Path "mss32").Path + "\"
+
+          Write-Host "SolutionDir: $solutionDir"
+
+          if (-not (Test-Path "mss32/includePath.props")) {
+            throw "Missing mss32/includePath.props"
+          }
+
           & msbuild "D2RSG/ScenarioGenerator/ScenarioGenerator.vcxproj" `
             /m `
             /p:Configuration=Release `
             /p:Platform=Win32 `
+            "/p:SolutionDir=$solutionDir" `
             /v:minimal
 
           if ($LASTEXITCODE -ne 0) {
             throw "ScenarioGenerator build failed"
           }
+
 
       - name: Verify libraries
         shell: pwsh
