@@ -311,9 +311,35 @@ static void readExtandedBattleSettings(const sol::table& table, Settings::Extend
     value.experimental = readSetting(category.value(), "experimental", def.experimental);
 }
 
+static void readZmLimitsSettings(const sol::table& table, Settings::ZmLimits& value)
+{
+    const auto defaults = defaultGameSettings().zmLimits;
+    const auto category = table.get<sol::optional<sol::table>>("zmLimits");
+    if (!category.has_value()) {
+        value = defaults;
+        return;
+    }
+
+    const auto& cfg = category.value();
+    value.enabled = readSetting(cfg, "enabled", defaults.enabled);
+    value.spellsPerTurn = readSetting(cfg, "spellsPerTurn", defaults.spellsPerTurn, 0, 9999);
+    value.permanentPotionsPerUnit = readSetting(cfg, "permanentPotionsPerUnit", defaults.permanentPotionsPerUnit, 0, 9999);
+    value.onedayPotionsPerUnit = readSetting(cfg, "onedayPotionsPerUnit", defaults.onedayPotionsPerUnit, 0, 9999);
+    value.testSessionSpellBlock = readSetting(cfg, "testSessionSpellBlock", defaults.testSessionSpellBlock);
+    value.testPersistedSpellBlock = readSetting(cfg, "testPersistedSpellBlock", defaults.testPersistedSpellBlock);
+    // Do not silently allow both experimental modes to run together.
+    if (value.testSessionSpellBlock && value.testPersistedSpellBlock)
+        value.enabled = false;
+}
+
 static void readSettings(const sol::table& table, Settings& settings)
 {
     // clang-format off
+    readZmLimitsSettings(table, settings.zmLimits);
+    // ZM v9 native quota settings. Limits must be checked in authoritative action paths.
+    settings.maxSpellsPerTurn = readSetting(table, "maxSpellsPerTurn", defaultGameSettings().maxSpellsPerTurn, 0, 9999);
+    settings.maxPotionBoostsPerUnit = readSetting(table, "maxPotionBoostsPerUnit", defaultGameSettings().maxPotionBoostsPerUnit, 0, 9999);
+    settings.maxPotionOnedayBoostsPerUnit = readSetting(table, "maxPotionOnedayBoostsPerUnit", defaultGameSettings().maxPotionOnedayBoostsPerUnit, 0, 9999);
     settings.unitMaxDamage = readSetting(table, "unitMaxDamage", defaultGameSettings().unitMaxDamage);
     settings.unitMaxArmor = readSetting(table, "unitMaxArmor", defaultGameSettings().unitMaxArmor);
     settings.stackScoutRangeMax = readSetting(table, "stackMaxScoutRange", defaultGameSettings().stackScoutRangeMax);
@@ -399,6 +425,10 @@ const Settings& baseGameSettings()
     static bool initialized = false;
 
     if (!initialized) {
+        // ZM v9 native quota settings: no new cap unless Scripts/settings.lua opts in.
+        settings.maxSpellsPerTurn = 0;
+        settings.maxPotionBoostsPerUnit = 0;
+        settings.maxPotionOnedayBoostsPerUnit = 0;
         settings.unitMaxDamage = 300;
         settings.unitMaxArmor = 90;
         settings.stackScoutRangeMax = 8;

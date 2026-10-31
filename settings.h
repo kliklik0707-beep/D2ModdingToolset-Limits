@@ -33,6 +33,19 @@ namespace hooks {
 
 struct Settings
 {
+    // ZM v9 native quota settings; zero disables the additional cap.
+    int maxSpellsPerTurn;
+    int maxPotionBoostsPerUnit;
+    int maxPotionOnedayBoostsPerUnit;
+    // Optional spell/potion caps. Enforcement is implemented in separate hooks.
+    struct ZmLimits {
+        bool enabled{false};
+        int spellsPerTurn{5};
+        int permanentPotionsPerUnit{3};
+        int onedayPotionsPerUnit{3};
+        bool testSessionSpellBlock{false};
+        bool testPersistedSpellBlock{false};
+    } zmLimits;
     int unitMaxDamage;
     int unitMaxArmor;
     int stackScoutRangeMax;
