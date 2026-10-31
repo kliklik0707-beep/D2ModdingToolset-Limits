@@ -66,23 +66,37 @@ jobs:
 
           Write-Host "Selected: $($selected.Configuration)|$($selected.Platform)"
 
+
+      - name: Inspect mss32 project configurations
+        shell: pwsh
+        run: |
+          $project = "mss32/mss32.vcxproj"
+          [xml]$xml = Get-Content $project
+
+          Write-Host "=== Available project configurations ==="
+          $xml.Project.ItemGroup.ProjectConfiguration |
+            ForEach-Object {
+              Write-Host $_.Include
+            }
+
+          Write-Host "=== Output directories ==="
+          $xml.Project.PropertyGroup |
+            Where-Object { $_.Condition -or $_.OutDir } |
+            ForEach-Object {
+              Write-Host "Condition: $($_.Condition)"
+              Write-Host "OutDir: $($_.OutDir)"
+              Write-Host "ConfigurationType: $($_.ConfigurationType)"
+            }
+
       - name: Compile DLL
         shell: pwsh
         run: |
-          $arguments = @(
-            "mss32/mss32.sln"
-            "/m"
-            "/p:Configuration=$env:BUILD_CONFIG"
-            "/p:Platform=$env:BUILD_PLATFORM"
-            "/v:minimal"
-            "/bl:build.binlog"
-          )
-
-          & msbuild @arguments
+          & msbuild "mss32/mss32.sln" /m /p:Configuration=Release /p:Platform=Win32 /v:minimal /bl:build.binlog
 
           if ($LASTEXITCODE -ne 0) {
             throw "MSBuild failed with exit code $LASTEXITCODE"
           }
+
 
       - name: Upload build logs
         if: always()
