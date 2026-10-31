@@ -1,16 +1,13 @@
 
-
-name: D2ModdingToolset - Build DLL Win32
+name: D2ModdingToolset - Build DLL
 
 on:
   push:
-    branches:
-      - master
+    branches: [master]
   workflow_dispatch:
 
 jobs:
   build:
-    name: Build mss32.dll
     runs-on: windows-2022
 
     steps:
@@ -22,22 +19,70 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Verify project files
-        shell: cmd
+      - name: Detect solution configuration
+        shell: pwsh
         run: |
-          echo Checking repository...
-          echo Branch: %GITHUB_REF_NAME%
-          dir mss32
+          $solution = "mss32/mss32.sln"
 
-          if not exist "mss32\mss32.sln" exit /b 1
-          if not exist "mss32\mss32.vcxproj" exit /b 1
+          if (-not (Test-Path $solution)) {
+            throw "Solution file not found: $solution"
+          }
 
-          echo Project files found!
+          $content = Get-Content $solution
+          $inside = $false
+          $configs = @()
+
+          foreach ($line in $content) {
+            if ($line -match 'GlobalSection\(SolutionConfigurationPlatforms\)') {
+              $inside = $true
+              continue
+            }
+
+            if ($inside -and $line -match 'EndGlobalSection') {
+              break
+            }
+
+            if ($inside -and $line -match '^\s*(.+?)\|(.+?)\s*=') {
+              $configs += [PSCustomObject]@{
+                Configuration = $Matches[1].Trim()
+                Platform = $Matches[2].Trim()
+              }
+            }
+          }
+
+          Write-Host "Available configurations:"
+          $configs | Format-Table | Out-String | Write-Host
+
+          $selected = $configs |
+            Where-Object { $_.Configuration -eq "Release" } |
+            Select-Object -First 1
+
+          if (-not $selected) {
+            throw "No Release configuration found."
+          }
+
+          "BUILD_CONFIG=$($selected.Configuration)" >> $env:GITHUB_ENV
+          "BUILD_PLATFORM=$($selected.Platform)" >> $env:GITHUB_ENV
+
+          Write-Host "Selected: $($selected.Configuration)|$($selected.Platform)"
 
       - name: Compile DLL
-        shell: cmd
+        shell: pwsh
         run: |
-          msbuild "mss32\mss32.sln" /m /p:Configuration=Release /p:Platform=Win32 /v:minimal /bl:build.binlog
+          $arguments = @(
+            "mss32/mss32.sln"
+            "/m"
+            "/p:Configuration=$env:BUILD_CONFIG"
+            "/p:Platform=$env:BUILD_PLATFORM"
+            "/v:minimal"
+            "/bl:build.binlog"
+          )
+
+          & msbuild @arguments
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "MSBuild failed with exit code $LASTEXITCODE"
+          }
 
       - name: Upload build logs
         if: always()
@@ -53,6 +98,6 @@ jobs:
         with:
           name: compiled-mss32
           path: |
-            **/Release/mss32.dll
-            **/Release/Mss32.dll
-          if-no-files-found: error
+            **/Release/*.dll
+            **/x86/Release/*.dll
+          if-no-files-found: warn
