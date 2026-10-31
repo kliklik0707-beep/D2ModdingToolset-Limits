@@ -67,13 +67,47 @@ jobs:
           }
 
 
+
       - name: Verify libraries
         shell: pwsh
         run: |
-          $libraries = @(
-            "mss32/Lib/SLikeNet_LibStatic_Release_Win32.lib"
-            "mss32/Lib/ScenarioGenerator_Release_Win32.lib"
+          Write-Host "=== Searching for compiled libraries ==="
+
+          Get-ChildItem -Path . -Filter "*.lib" -Recurse -File |
+            ForEach-Object {
+              Write-Host $_.FullName
+            }
+
+          $expectedDir = "mss32/Lib"
+          New-Item -ItemType Directory -Force -Path $expectedDir | Out-Null
+
+          $names = @(
+            "SLikeNet_LibStatic_Release_Win32.lib"
+            "ScenarioGenerator_Release_Win32.lib"
           )
+
+          foreach ($name in $names) {
+            $target = Join-Path $expectedDir $name
+
+            if (Test-Path $target) {
+              Write-Host "Found: $target"
+              continue
+            }
+
+            $source = Get-ChildItem -Path . -Filter $name -Recurse -File |
+              Where-Object { $_.FullName -ne (Join-Path (Resolve-Path $expectedDir).Path $name) } |
+              Select-Object -First 1
+
+            if (-not $source) {
+              throw "Library was not generated: $name"
+            }
+
+            Copy-Item -LiteralPath $source.FullName -Destination $target -Force
+            Write-Host "Copied: $($source.FullName) -> $target"
+          }
+
+          Write-Host "All required libraries found."
+
 
           foreach ($library in $libraries) {
             if (-not (Test-Path $library)) {
