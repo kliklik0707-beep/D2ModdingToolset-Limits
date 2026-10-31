@@ -790,8 +790,10 @@ static bool __fastcall zm31CastSpellMessageObserved(game::CMidServerLogic* thisp
                 spdlog::warn("[ZM36_PERSIST] DENY_SAVED player={} turn={} "
                              "used={} max={} NO_CALLBACK NO_SPEND",
                              playerId, turn, used, zm36Cfg.spellsPerTurn);
-                showErrorMessageBox(fmt::format("Spell limit reached!\nYou have already cast {} spells this turn.", zm36Cfg.spellsPerTurn));
-                return true; // As stage34: message handled; original callback not run.
+                // ZM diagnostic: report rejected message to network dispatcher.
+                // Original spell callback remains skipped; no mana is spent.
+                // EXPERIMENTAL: verify whether client releases the spell task.
+                return false;
             }
         }
     }
@@ -813,8 +815,9 @@ static bool __fastcall zm31CastSpellMessageObserved(game::CMidServerLogic* thisp
                          "paidCasts={} max={} NO_CALLBACK NO_SPEND "
                          "(NO in-game popup; NOT SAVE SAFE)",
                          playerId, turn, spent, cap);
-            showErrorMessageBox(fmt::format("Spell limit reached!\nYou have already cast {} spells this turn.", cap));
-            return true;
+            // ZM diagnostic: explicit rejected-message status to dispatcher.
+            // EXPERIMENTAL: verify whether client releases the spell task.
+            return false;
         }
         spdlog::warn("[ZM34_SPELL] ALLOW_TEST_SESSION player={} turn={} "
                      "paidCasts={} max={}", playerId, turn, spent, cap);
