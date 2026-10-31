@@ -1,62 +1,45 @@
 
-name: D2 DLL Build Master
+
+name: D2ModdingToolset - Build DLL Win32
 
 on:
   push:
-    branches: [master]
+    branches:
+      - master
   workflow_dispatch:
 
 jobs:
   build:
+    name: Build mss32.dll
     runs-on: windows-2022
 
     steps:
-      - name: Checkout master
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: master
           submodules: recursive
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Verify source files
-        shell: pwsh
+      - name: Verify project files
+        shell: cmd
         run: |
-          Write-Host "Repository: $env:GITHUB_REPOSITORY"
-          Write-Host "Branch: $env:GITHUB_REF_NAME"
-          Write-Host "Files:"
-          Get-ChildItem -Force | Select-Object Name
+          echo Checking repository...
+          echo Branch: %GITHUB_REF_NAME%
+          dir mss32
 
-          if (-not (Test-Path "mss32/mss32.vcxproj")) {
-            throw "Missing mss32/mss32.vcxproj"
-          }
+          if not exist "mss32\mss32.sln" exit /b 1
+          if not exist "mss32\mss32.vcxproj" exit /b 1
 
-          Write-Host "Project found successfully!"
-
+          echo Project files found!
 
       - name: Compile DLL
-        shell: pwsh
+        shell: cmd
         run: |
-          Write-Host "Checking solution configurations..."
+          msbuild "mss32\mss32.sln" /m /p:Configuration=Release /p:Platform=Win32 /v:minimal /bl:build.binlog
 
-          & msbuild "mss32/mss32.sln" /t:ValidateSolutionConfiguration /p:Configuration=Release /p:Platform=Win32 /v:minimal
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Release Win32 is not a valid solution configuration."
-          }
-
-          Write-Host "Building solution..."
-
-          & msbuild "mss32/mss32.sln" /m /p:Configuration=Release /p:Platform=Win32 /v:minimal /bl:build.binlog
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Compilation failed: $LASTEXITCODE"
-          }
-
-          }
-
-      - name: Upload logs
+      - name: Upload build logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -64,10 +47,12 @@ jobs:
           path: build.binlog
           if-no-files-found: warn
 
-      - name: Upload DLL
+      - name: Upload compiled DLL
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: compiled-mss32
-          path: "**/Release/mss32.dll"
+          path: |
+            **/Release/mss32.dll
+            **/Release/Mss32.dll
           if-no-files-found: error
