@@ -1192,6 +1192,16 @@ Hooks getHooks()
 // Addresses are specific to Discipl2(20261031-180023).exe.
 static game::CTaskSpellVftable::CastSpell zm57OriginalCastSpell = nullptr;
 
+// ZM59: speculative client-side dispatch watermark. It is NOT a server acknowledgement.
+// This avoids stale scenario variables allowing the sixth dispatched cast.
+struct Zm59DispatchState {
+    unsigned turn = ~0u;
+    unsigned playerIndex = ~0u;
+    unsigned dispatched = 0;
+};
+static Zm59DispatchState zm59DispatchState;
+
+
 static void __fastcall zm57CastSpellObserved(const game::CTaskSpell* task,
                                              void* /*edx*/,
                                              const game::CMqPoint* position)
@@ -1227,7 +1237,23 @@ static void __fastcall zm57CastSpellObserved(const game::CTaskSpell* task,
                 ? (packed & 0xffffu) : 0u;
             spdlog::warn("[ZM58_CLIENT] PRECHECK slot={} turn={} savedTurn={} used={} max={}",
                          slotName, turn, savedTurn, used, limits.spellsPerTurn);
-            if (used >= static_cast<unsigned>(limits.spellsPerTurn)) {
+            // Synchronize upwards only: a stale client map must not roll the watermark back.
+            if (zm59DispatchState.turn != static_cast<unsigned>(turn) ||
+                zm59DispatchState.playerIndex != playerIndex) {
+                zm59DispatchState.turn = static_cast<unsigned>(turn);
+                zm59DispatchState.playerIndex = playerIndex;
+                zm59DispatchState.dispatched = used;
+            } else if (used > zm59DispatchState.dispatched) {
+                zm59DispatchState.dispatched = used;
+            }
+            spdlog::warn("[ZM59_CLIENT] WATERMARK slot={} turn={} saved={} dispatched={} max={}",
+                         slotName, turn, used, zm59DispatchState.dispatched,
+                         limits.spellsPerTurn);
+            if (zm59DispatchState.dispatched >=
+                static_cast<unsigned>(limits.spellsPerTurn)) {
+                spdlog::warn("[ZM59_CLIENT] DENY_LOCAL slot={} turn={} dispatched={} NO_SEND",
+                             slotName, turn, zm59DispatchState.dispatched);
+
                 spdlog::warn("[ZM58_CLIENT] DENY_LOCAL slot={} turn={} used={} NO_SEND",
                              slotName, turn, used);
                 MessageBoxW(nullptr,
@@ -1235,6 +1261,11 @@ static void __fastcall zm57CastSpellObserved(const game::CTaskSpell* task,
                             L"Limit zaklec", MB_OK | MB_ICONINFORMATION);
                 return;
             }
+            // Count client dispatches optimistically; failed/cancelled casts may
+            // be overcounted. A server acknowledgement is needed for production.
+            ++zm59DispatchState.dispatched;
+            spdlog::warn("[ZM59_CLIENT] DISPATCH_PENDING slot={} turn={} dispatched={}",
+                         slotName, turn, zm59DispatchState.dispatched);
         } else {
             spdlog::warn("[ZM58_CLIENT] NO_SLOT_OR_MAP slot={} turn={} FAIL_OPEN",
                          slotName, turn);
