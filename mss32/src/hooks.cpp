@@ -1201,6 +1201,45 @@ static void __fastcall zm57CastSpellObserved(const game::CTaskSpell* task,
                  task ? static_cast<const void*>(task->data) : nullptr,
                  static_cast<const void*>(position),
                  reinterpret_cast<const void*>(zm57OriginalCastSpell));
+    // ZM58: preflight from the CLIENT scenario map; no local quota counter.
+    // Fail open if the client view is unavailable or not yet synchronized.
+    const auto& limits = gameSettings().zmLimits;
+    if (limits.enabled && limits.testPersistedSpellBlock &&
+        !limits.testSessionSpellBlock && limits.spellsPerTurn > 0 &&
+        limits.spellsPerTurn <= 65535 &&
+        gameSettings().maxSpellsPerTurn >= limits.spellsPerTurn &&
+        task && task->data && task->data->phaseGame &&
+        task->data->phaseGame->data) {
+        const auto* objectMap = getObjectMap();
+        const auto* info = objectMap ? getScenarioInfo(objectMap) : nullptr;
+        const auto* vars = objectMap ? getScenarioVariables(objectMap) : nullptr;
+        const int turn = info ? info->currentTurn : -1;
+        const unsigned playerIndex = static_cast<unsigned>(
+            task->data->phaseGame->data->currentPlayerId.value) & 0xffffu;
+        char slotName[24]{};
+        std::snprintf(slotName, sizeof(slotName), "ZM_SP_%04X", playerIndex);
+        if (turn >= 0 && turn <= 32767 && vars &&
+            hasScenarioVariableByName(vars, slotName)) {
+            const auto packed = static_cast<std::uint32_t>(
+                getScenarioVariableByName(vars, slotName, 0));
+            const unsigned savedTurn = packed >> 16;
+            const unsigned used = savedTurn == static_cast<unsigned>(turn)
+                ? (packed & 0xffffu) : 0u;
+            spdlog::warn("[ZM58_CLIENT] PRECHECK slot={} turn={} savedTurn={} used={} max={}",
+                         slotName, turn, savedTurn, used, limits.spellsPerTurn);
+            if (used >= static_cast<unsigned>(limits.spellsPerTurn)) {
+                spdlog::warn("[ZM58_CLIENT] DENY_LOCAL slot={} turn={} used={} NO_SEND",
+                             slotName, turn, used);
+                MessageBoxW(nullptr,
+                            L"Limit zaklec strategicznych w tej turze zostal wykorzystany.",
+                            L"Limit zaklec", MB_OK | MB_ICONINFORMATION);
+                return;
+            }
+        } else {
+            spdlog::warn("[ZM58_CLIENT] NO_SLOT_OR_MAP slot={} turn={} FAIL_OPEN",
+                         slotName, turn);
+        }
+    }
     if (zm57OriginalCastSpell)
         zm57OriginalCastSpell(task, position);
     spdlog::warn("[ZM57_CLIENT] CAST_RETURN task={}", static_cast<const void*>(task));
