@@ -1,0 +1,59 @@
+
+name: D2 DLL Build Master
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          submodules: recursive
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Verify source files
+        shell: pwsh
+        run: |
+          Write-Host "Repository: $env:GITHUB_REPOSITORY"
+          Write-Host "Branch: $env:GITHUB_REF_NAME"
+          Write-Host "Files:"
+          Get-ChildItem -Force | Select-Object Name
+
+          if (-not (Test-Path "mss32/mss32.vcxproj")) {
+            throw "Missing mss32/mss32.vcxproj"
+          }
+
+          Write-Host "Project found successfully!"
+
+      - name: Compile DLL
+        shell: pwsh
+        run: |
+          & msbuild "mss32/mss32.vcxproj" /m /p:Configuration=Release /p:Platform=Win32 /bl:build.binlog
+          if ($LASTEXITCODE -ne 0) {
+            throw "Compilation failed: $LASTEXITCODE"
+          }
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: build.binlog
+          if-no-files-found: warn
+
+      - name: Upload DLL
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compiled-mss32
+          path: "**/Release/mss32.dll"
+          if-no-files-found: error
