@@ -135,6 +135,7 @@
 #include "itembase.h"
 #include "itemcategory.h"
 #include "itemexpotionboost.h"
+#include "itemtypelist.h"
 #include "itemtransferhooks.h"
 #include "itemutils.h"
 #include "leaderabilitycat.h"
