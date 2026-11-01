@@ -133,6 +133,7 @@
 #include "isoview.h"
 #include "isoviewhooks.h"
 #include "itembase.h"
+#include "itemtypelist.h"
 #include "itemcategory.h"
 #include "itemexpotionboost.h"
 #include "itemtransferhooks.h"
